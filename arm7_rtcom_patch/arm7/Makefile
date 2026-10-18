@@ -88,12 +88,16 @@ else
 endif
 #---------------------------------------------------------------------------------
 
-.PHONY: $(BUILD) clean
+.PHONY: $(BUILD) patch_objects clean
  
 #---------------------------------------------------------------------------------
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+patch_objects:
+	@[ -d $(BUILD) ] || mkdir -p $(BUILD)
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile arm7_rtcom_patch.uc11.o rtcom.o
  
 #---------------------------------------------------------------------------------
 clean:

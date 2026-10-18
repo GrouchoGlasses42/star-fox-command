@@ -61,6 +61,152 @@ MovePlayerWithCPad_End:
 
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@ Replace the raw touch sample while the Y-button bomb control is active.
+@ First Y press: touch the bomb icon and move the target to the radar center.
+@ Second Y press, or 120 target frames: release the touch and detonate the bomb.
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+bomb_touch_sample:
+    push    {r4-r8, lr}
+    mov     r4, r0                  @ raw touch sample output
+
+    @ Preserve the real stylus sample before deciding whether to replace it.
+    ldr     r3, touch_sample_func
+    blx     r3
+
+    @ The barrel-roll hook records the last frame that flight code ran.
+    @ Accept the current or previous frame to allow for input-update order.
+    ldr     r0, frame_counter
+    ldr     r1, [r0]
+    ldr     r0, bomb_flight_frame
+    sub     r1, r1, r0
+    cmp     r1, #1
+    bhi     bomb_touch_sample__outside_flight
+
+    @ Convert the active-low Y bit to 0 or 1 and detect a new press.
+    ldr     r0, ds_key_mirror
+    ldrh    r0, [r0]
+    mvn     r0, r0
+    and     r0, r0, #0x800
+    mov     r0, r0, lsr #11
+    ldr     r1, bomb_y_held
+    str     r0, bomb_y_held
+    eor     r2, r0, r1
+    and     r2, r2, r0
+
+    ldr     r3, bomb_state
+    cmp     r2, #0
+    beq     bomb_touch_sample__continue
+    cmp     r3, #0
+    bne     bomb_touch_sample__release
+
+    @ Start a new bomb drag at the bomb icon.
+    mov     r3, #1
+    str     r3, bomb_state
+    mov     r0, #0
+    str     r0, bomb_timer
+    mov     r0, #0x8000             @ 128 in 8.8 fixed point
+    str     r0, bomb_cursor_x
+    mov     r0, #0x6000             @ 96 in 8.8 fixed point
+    str     r0, bomb_cursor_y
+
+bomb_touch_sample__continue:
+    cmp     r3, #1
+    beq     bomb_touch_sample__icon
+    cmp     r3, #2
+    beq     bomb_touch_sample__target
+    b       bomb_touch_sample__exit
+
+bomb_touch_sample__icon:
+    ldr     r0, bomb_timer
+    add     r0, r0, #1
+    cmp     r0, #6                  @ about 100 ms at 60 frames per second
+    movge   r1, #2
+    strge   r1, bomb_state
+    movge   r0, #0
+    str     r0, bomb_timer
+
+    mov     r0, #224                @ bomb icon
+    strh    r0, [r4, #0]
+    mov     r0, #56
+    strh    r0, [r4, #2]
+    mov     r0, #1                  @ stylus down
+    strh    r0, [r4, #4]
+    mov     r0, #0                  @ valid sample
+    strh    r0, [r4, #6]
+    b       bomb_touch_sample__exit
+
+bomb_touch_sample__target:
+    ldr     r0, bomb_timer
+    add     r0, r0, #1
+    cmp     r0, #120                @ about two seconds
+    bge     bomb_touch_sample__release
+    str     r0, bomb_timer
+
+    @ Move an 8.8 fixed-point cursor with the C-Stick.
+    ldr     r0, RTCom_Output
+    ldrsh   r2, [r0, #6]            @ C-Stick X
+    ldrsh   r3, [r0, #8]            @ C-Stick Y
+
+    ldr     r0, bomb_cursor_x
+    add     r0, r0, r2, lsl #3
+    mov     r1, #0x3000             @ x minimum: 48
+    cmp     r0, r1
+    movlt   r0, r1
+    mov     r1, #0xd000             @ x maximum: 208
+    cmp     r0, r1
+    movgt   r0, r1
+    str     r0, bomb_cursor_x
+    mov     r0, r0, asr #8
+    strh    r0, [r4, #0]
+
+    ldr     r0, bomb_cursor_y
+    sub     r0, r0, r3, lsl #3
+    mov     r1, #0x2800             @ y minimum: 40
+    cmp     r0, r1
+    movlt   r0, r1
+    mov     r1, #0xb000             @ y maximum: 176
+    cmp     r0, r1
+    movgt   r0, r1
+    str     r0, bomb_cursor_y
+    mov     r0, r0, asr #8
+    strh    r0, [r4, #2]
+
+    mov     r0, #1                  @ stylus down
+    strh    r0, [r4, #4]
+    mov     r0, #0                  @ valid sample
+    strh    r0, [r4, #6]
+    b       bomb_touch_sample__exit
+
+bomb_touch_sample__release:
+    mov     r0, #0
+    str     r0, bomb_state
+    str     r0, bomb_timer
+    strh    r0, [r4, #4]            @ stylus up
+    strh    r0, [r4, #6]
+    b       bomb_touch_sample__exit
+
+bomb_touch_sample__outside_flight:
+    mov     r0, #0
+    str     r0, bomb_state
+    str     r0, bomb_timer
+    str     r0, bomb_y_held
+
+bomb_touch_sample__exit:
+    pop     {r4-r8, pc}
+
+.align 2
+touch_sample_func:      .long TOUCH_SAMPLE_FUNC_ADDR + 1
+frame_counter:          .long 0x027ffc3c
+ds_key_mirror:          .long 0x027fffa8
+bomb_flight_frame:      .long 0
+bomb_y_held:            .long 0
+bomb_state:             .long 0
+bomb_timer:             .long 0
+bomb_cursor_x:          .long 0x00008000
+bomb_cursor_y:          .long 0x00006000
+
+
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 @ 022115be | 41 30 | adds r0,#0x41
 @ 022115c0 | 00 78 | ldrb r0,[r0,#0x0]
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -68,6 +214,11 @@ MovePlayerWithCPad_End:
 barrel_roll_func:
     ldrb    r0, [r0, #0x41] @ overwritten opcode
     push    {r0-r7}
+
+    @ Mark this frame as active flight code for the Y-button bomb hook.
+    ldr     r0, frame_counter
+    ldr     r0, [r0]
+    str     r0, bomb_flight_frame
 
     @ get SuperState
     ldr     r0, [r4, #0x30]
@@ -207,7 +358,7 @@ boostbrake_func:
     bge     noboost
 
     ands    r0,r1,#0x3			;@ x + b pressed?
-    strbeq  r0,[r4,#0xf]		;@ turn brake flag off
+    streqb  r0,[r4,#0xf]		;@ turn brake flag off
     beq     onlyboost			;@ only boost
 
     and     r0,r1,#0x2			;@ b pressed? - brake

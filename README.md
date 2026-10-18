@@ -13,6 +13,8 @@ These components send Circle Pad input to the game.
 | X button | Boost |
 | B button | Brake |
 | A button | Barrel roll |
+| Y button | Start or detonate a Smart Bomb |
+| C-Stick | Move the Smart Bomb target |
 | D-Pad Up | Loop |
 | D-Pad Down | U-turn |
 
@@ -20,6 +22,13 @@ The A button also confirms a menu selection.
 The B button also cancels a menu selection.
 Only D-Pad Up and D-Pad Down start the two flight maneuvers.
 Circle Pad input does not start these maneuvers.
+
+Press the Y button to select a Smart Bomb.
+The target moves to the center of the radar.
+Use the C-Stick to move the target.
+Press the Y button again to detonate the bomb.
+The bomb detonates automatically after approximately two seconds.
+The C-Stick control requires a New Nintendo 3DS or New Nintendo 2DS XL system.
 
 ## Supported ROM Versions
 
