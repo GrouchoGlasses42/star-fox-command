@@ -81,6 +81,11 @@ It also builds `action_replay_codes/usrcheat.dat`.
 - `generate_patch.py` builds the Action Replay files.
 - `action_replay_codes/` contains the regional codes and the cheat database.
 
+## Credits
+
+- The Circle Pad and RTCom implementation is based on [shocoman's project](https://github.com/shocoman/Analog-Controls-for-NDS-Games-on-3DS).
+- The game-control hooks are based on [cracker's original Star Fox Command patch](https://gbatemp.net/threads/starfox-command-u-d-pad-hack.118663/page-7).
+
 ## Disclaimer
 
 This project is independent and unofficial.
