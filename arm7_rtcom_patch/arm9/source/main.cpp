@@ -99,29 +99,6 @@ int main() {
             printf("\x1b[13;0HButton B is NOT down\n");
         }
 
-        u32 nub = *(vu32 *)(RTCOM_DATA_OUTPUT + 4);
-        u8 zlzr = nub & 0xFF;
-        s8 nub_x = (nub >> 8) & 0xFF;
-        s8 nub_y = (nub >> 16) & 0xFF;
-        iprintf("\x1b[%d;0H\t ZL&ZR: %08X", 4, zlzr);
-        iprintf("\x1b[%d;0H \x1b[2K \tRawNub: {X: %+04d; Y: %+04d} \n ", 5, nub_x, nub_y);
-
-        // rotate Nub 45 degrees
-        // new_x = x * cos - y * sin = x * sin - y * sin = sin*(x-y)
-        // new_y = x * sin + y * cos = x * sin + y * sin = sin*(x+y)
-        s32 sin_45 = 0xB50;
-        s32 rot_nub_x = (sin_45 * (nub_x - nub_y) + 0x800) >> 12;
-        s32 rot_nub_y = (sin_45 * (nub_x + nub_y) + 0x800) >> 12;
-        iprintf("\x1b[%d;0H \x1b[2K \tRotatedNub: {%+04d; %+04d}\n", 6, rot_nub_x, rot_nub_y);
-
-        vu16 *gyro = (vu16 *)(RTCOM_DATA_OUTPUT + 8);
-        s16 gyro_x = *gyro;
-        s16 gyro_y = *(gyro + 1);
-        s16 gyro_z = *(gyro + 2);
-        iprintf("\x1b[%d;0H\x1b[2K Gyro: %+07d; %+07d; %+07d\n", 8, gyro_x, gyro_y, gyro_z);
-        iprintf("\x1b[%d;0H\x1b[2K RawGyro: %04x; %04x; %04x\n", 9, (u16)gyro_x, (u16)gyro_y,
-                (u16)gyro_z);
-
         u8 *date_time = (u8 *)(RTCOM_DATA_OUTPUT - 8);
         u8 year = date_time[0], month = date_time[1], day = date_time[2];
         u8 dow = date_time[3];

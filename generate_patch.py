@@ -1,27 +1,40 @@
 #!/bin/python
 from pathlib import Path
+import base64
+import hashlib
 import subprocess
 import re
 import struct
 from collections import defaultdict, namedtuple
 
 tmp_folder_name = "tmp_ndstools"
-arm7_update_rtcom_function_name = "Update_RTCom"
 
 asm_exe_path = "arm-none-eabi-as"
 objcopy_exe_path = "arm-none-eabi-objcopy"
 objdump_exe_path = "arm-none-eabi-objdump"
-ld_exe_path = "arm-none-eabi-ld"
-make_exe_path = "make"
+
+prebuilt_arm7_path = Path(__file__).resolve().parent / "arm7_rtcom_patch/known_good_cpad_transport.b64"
+prebuilt_arm7_sha256 = "bf7895010672f5db1a4a860231b5e3b958c65ec871bab288b4b6a9487c086daf"
+prebuilt_arm7_size = 0x7A8
+prebuilt_update_rtcom_offset = 0x418
+
+ControlVariant = namedtuple('ControlVariant', 'name directory inverted shoot_on_a')
+VARIANTS = (
+    ControlVariant("3DS - Normal - L/R", "3ds_normal_lr", False, False),
+    ControlVariant("3DS - Inverted - L/R", "3ds_inverted_lr", True, False),
+    ControlVariant("3DS - Normal - A", "3ds_normal_a", False, True),
+    ControlVariant("3DS - Inverted - A", "3ds_inverted_a", True, True),
+)
+DEFAULT_VARIANT = VARIANTS[0]
 
 
 RomInfo = namedtuple(
     'RomInfo',
-    'arm7_ipc_send_msg, arm7_set_ipc_channel_handler, arm7_rtc_region_start, arm7_vblank_irq_end_address, arm7_rtc_init_function_call, arm9_code_position, arm9_barrel_roll_hook, arm9_shooting_keys_addr, arm9_crackers_dpad_hook, arm9_crackers_dpad_hook_return, arm9_crackers_boostbrake_hook, arm9_crackers_boostbrake_hook_return, arm9_crackers_key_mask_addr, arm9_loop_func, arm9_uturn_func, arm9_touch_sample_hook, arm9_touch_sample_func, description')
+    'arm7_ipc_send_msg, arm7_set_ipc_channel_handler, arm7_rtc_region_start, arm7_vblank_irq_end_address, arm7_rtc_init_function_call, arm9_code_position, arm9_barrel_roll_hook, arm9_shooting_keys_addr, arm9_crackers_dpad_hook, arm9_crackers_dpad_hook_return, arm9_loop_func, arm9_uturn_func, arm9_touch_sample_hook, arm9_touch_sample_func, description')
 roms_info = {
-    "ASFP-F0E8BD5C": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022113C2, 0x021CCCF0, 0x021E9434, 0x021E943D, 0x021EDBCC, 0x021EDBD5, 0x0203D468, 0x021EE528, 0x021EE550, 0x0203BFAE, 0x0203C068, "Europe v1.0"),
-    "ASFJ-70977801": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022114A6, 0x021CD164, 0x021E9C18, 0x021E9C21, 0x021EE3B0, 0x021EE3B9, 0x0203D414, 0x021EED0C, 0x021EED34, 0x0203BF5A, 0x0203C014, "Japan v1.0"),
-    "ASFE-F22E6A7D": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022115BE, 0x021CD250, 0x021E9D34, 0x021E9D3D, 0x021EE4CC, 0x021EE4D5, 0x0203D414, 0x021EEE28, 0x021EEE50, 0x0203BF5A, 0x0203C014, "USA v1.0"),
+    "ASFP-F0E8BD5C": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022113C2, 0x021CCCF0, 0x021E9434, 0x021E943D, 0x021EE528, 0x021EE550, 0x0203BFAE, 0x0203C068, "Europe v1.0"),
+    "ASFJ-70977801": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022114A6, 0x021CD164, 0x021E9C18, 0x021E9C21, 0x021EED0C, 0x021EED34, 0x0203BF5A, 0x0203C014, "Japan v1.0"),
+    "ASFE-F22E6A7D": RomInfo(0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0, 0x02000000, 0x022115BE, 0x021CD250, 0x021E9D34, 0x021E9D3D, 0x021EEE28, 0x021EEE50, 0x0203BF5A, 0x0203C014, "USA v1.0"),
 }
 
 
@@ -35,88 +48,30 @@ def find_function_offset_in_asm_listing(asm_code, func_name):
     return addr
 
 
-arm7_build_cache: dict[tuple[int, ...], tuple[int, bytes]] = dict() # cache to speed up the building of multiple versions
 def assemble_arm7_rtcom_patch(rom_signature):
     rom_info = roms_info[rom_signature]
-    cache_key = rom_info[:-1]
-    if cache_key in arm7_build_cache:
-        return arm7_build_cache[cache_key]
+    expected_addresses = (0x037FE9EC, 0x037FEAB8, 0x027F6798, 0x037FBAB4, 0x037F84E0)
+    if tuple(rom_info[:5]) != expected_addresses:
+        raise ValueError(f"The known-good ARM7 payload is not compatible with {rom_signature}")
 
-    arm7_patch_dir = 'arm7_rtcom_patch'
-    # Assemble the TwlBg runtime patch binary
-    twlbg_patch_folder = f"{arm7_patch_dir}/arm11_ucode/arm11_twlbg_patch"
-    patch_asm_input_file = "arm11_twlbg_patch.s"
+    encoded_payload = "".join(prebuilt_arm7_path.read_text().split())
+    arm7_patch_bytes = base64.b64decode(encoded_payload, validate=True)
+    payload_hash = hashlib.sha256(arm7_patch_bytes).hexdigest()
+    if len(arm7_patch_bytes) != prebuilt_arm7_size or payload_hash != prebuilt_arm7_sha256:
+        raise ValueError("The known-good ARM7 payload failed validation")
 
-    subprocess.check_output([asm_exe_path, patch_asm_input_file, "-o", "arm11_twlbg_patch.out"], cwd=twlbg_patch_folder)
-    subprocess.check_output([objcopy_exe_path, "-Obinary", "arm11_twlbg_patch.out", "TWLBG_PATCH.bin"],
-                            cwd=twlbg_patch_folder)
-
-    # generate a header file based on the runtime TwlBg patch's binary
-    code_binary = open(f"{twlbg_patch_folder}/TWLBG_PATCH.bin", 'rb').read()
-    with open(f"{twlbg_patch_folder}/twl_bg_patch_bytes.h", "w") as twl_bg_header_file:
-        twl_bg_header = f"// The file was automatically generated by a python script from '{patch_asm_input_file}'\n"
-        twl_bg_header += "#pragma once\n"
-        byte_values = [f"0x{b:02X}" for b in code_binary]
-        byte_lines = [", ".join(byte_values[i:i + 10]) for i in range(0, len(byte_values), 10)]
-        twl_bg_header += "unsigned char twlbg_patch_code[] = {\n"
-        twl_bg_header += ",\n".join(byte_lines)
-        twl_bg_header += "};\n"
-        twl_bg_header_file.write(twl_bg_header)
-
-    # Build the whole Arm7 + Arm11 part
-    subprocess.check_output([make_exe_path, 'clean', '--directory', arm7_patch_dir])
-
-    arm7_defines_for_compiler = [("ARM7_IPC_SEND_MSG", rom_info.arm7_ipc_send_msg),
-                                 ("ARM7_IPC_CHANNEL_HANDLER", rom_info.arm7_set_ipc_channel_handler),
-                                 ("INCLUDE_CSTICK_SUPPORT", 1)]
-    defines = "EXTERNAL_DEFINES=" + " ".join([f"-D{name}=0x{value:08X}" for name, value in arm7_defines_for_compiler])
-    try:
-        subprocess.check_output([make_exe_path, defines, f'TARGET={arm7_patch_dir}',
-                                 '--directory', f'{arm7_patch_dir}/arm11_ucode'],
-                                stderr=subprocess.STDOUT)
-        subprocess.check_output([
-            make_exe_path,
-            defines,
-            f'TARGET={arm7_patch_dir}',
-            'patch_objects',
-            '--directory',
-            f'{arm7_patch_dir}/arm7',
-        ], stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError as e:
-        print(e.output.decode('utf-8'))
-        exit(-1)
-
-    try:
-        subprocess.check_output([ld_exe_path, 'rtcom.o', f'{arm7_patch_dir}.uc11.o', '--output', 'arm7_patch.o',
-                                 '--section-start', f'.text={hex(rom_info.arm7_rtc_region_start)}'],
-                                cwd=f'{arm7_patch_dir}/arm7/build/')
-    except subprocess.CalledProcessError as e:
-        print(e.output.decode('utf-8'))
-        exit(-1)
-
-    subprocess.check_output(
-        [objcopy_exe_path, '-O', 'binary', '--only-section=.rodata', '--only-section=.text', 'arm7_patch.o',
-         'arm7_patch.bin'],
-        cwd=f'{arm7_patch_dir}/arm7/build/')
-    arm7_patch_bytes = open(f'{arm7_patch_dir}/arm7/build/arm7_patch.bin', 'rb').read()
-
-    rtcom_asm_code = subprocess.check_output([objdump_exe_path, '-d', 'rtcom.o'],
-                                             cwd=f'{arm7_patch_dir}/arm7/build/', text=True)
-    update_rtcom_func_offset = find_function_offset_in_asm_listing(rtcom_asm_code, arm7_update_rtcom_function_name)
-
-    arm7_build_cache[cache_key] = (update_rtcom_func_offset, arm7_patch_bytes)
-    return update_rtcom_func_offset, arm7_patch_bytes
+    return prebuilt_update_rtcom_offset, arm7_patch_bytes
 
 
-def assemble_arm9_patch(rom_signature, asm_filename):
+def assemble_arm9_patch(rom_signature, asm_filename, extra_defines=()):
     rom_info = roms_info[rom_signature]
 
     arm9_defines_for_assembler = [
         ("MOVE_RETURN_ADDR", rom_info.arm9_crackers_dpad_hook_return),
-        ("BOOSTBRAKE_RETURN_ADDR", rom_info.arm9_crackers_boostbrake_hook_return),
         ("LOOP_FUNC_ADDR", rom_info.arm9_loop_func),
         ("UTURN_FUNC_ADDR", rom_info.arm9_uturn_func),
         ("TOUCH_SAMPLE_FUNC_ADDR", rom_info.arm9_touch_sample_func),
+        *extra_defines,
     ]
     asm_defines = sum([["--defsym", f"{name}=0x{value:08X}"] for name, value in arm9_defines_for_assembler], [])
 
@@ -130,12 +85,14 @@ def assemble_arm9_patch(rom_signature, asm_filename):
     return bytearray(open(f"{tmp_folder_name}/{patch_name}.bin", 'rb').read()), asm_code
 
 
-def generate_action_replay_code(rom_signature):
+def generate_action_replay_code(rom_signature, variant=DEFAULT_VARIANT):
     def ar_code__bulk_write(bin: bytearray, address: int):
-        if len(bin) % 8 != 0:
-            bin += b'\x00' * (8 - len(bin) % 8)
-        ar_code = f"E{address:07X} {len(bin):08X}\n"
-        for words in struct.iter_unpack("<II", bin):
+        write_size = len(bin)
+        padded_bin = bytes(bin)
+        if write_size % 8 != 0:
+            padded_bin += b'\x00' * (8 - write_size % 8)
+        ar_code = f"E{address:07X} {write_size:08X}\n"
+        for words in struct.iter_unpack("<II", padded_bin):
             ar_code += f"{words[0]:08X} {words[1]:08X}\n"
         return ar_code
 
@@ -194,50 +151,68 @@ def generate_action_replay_code(rom_signature):
 
     ####################################################################################
     # Arm9 patch
-    arm9_start_address = rom_info.arm9_code_position
-    code_binary, code_asm_text = assemble_arm9_patch(rom_signature, "arm9_controls_hook.s")
+    code_exec_address = rom_info.arm9_code_position
+    code_binary, code_asm_text = assemble_arm9_patch(
+        rom_signature, "arm9_controls_hook.s",
+        (("INVERT_STEERING", int(variant.inverted)),
+         ("ROLL_ON_SHOULDERS", int(variant.shoot_on_a))),
+    )
+    if len(code_binary) > 0x4A0:
+        raise ValueError("The ARM9 patch exceeds the tested safe code area")
+    protected_ranges = (
+        (0x84, 0x8C), (0xF0, 0xF4), (0x144, 0x14C), (0x1BC, 0x1C4),
+        (0x22C, 0x230), (0x294, 0x29C), (0x2EC, 0x2F4),
+        (0x368, 0x36C), (0x3E0, 0x3E4), (0x446, 0x44C),
+    )
+    if any(
+        start < len(code_binary)
+        and code_binary[start:min(end, len(code_binary))] != bytes(min(end, len(code_binary)) - start)
+        for start, end in protected_ranges
+    ):
+        raise ValueError("The ARM9 layout overlaps a protected BIOS service entry")
+    safe_ranges = (
+        (0, 0x84), (0x8C, 0xF0), (0xF4, 0x144), (0x14C, 0x1BC),
+        (0x1C4, 0x22C), (0x230, 0x294), (0x29C, 0x2EC),
+        (0x2F4, 0x368), (0x36C, 0x3E0), (0x3E4, 0x446), (0x44C, 0x4A0),
+    )
+    code_writes = "".join(
+        ar_code__bulk_write(code_binary[start:end], code_exec_address + start)
+        for start, end in safe_ranges if end > start
+    )
 
     # Player Movement
     player_move_hook_addr = rom_info.arm9_crackers_dpad_hook
     player_move_orig_instr = 0x2298
     player_move_offset = find_function_offset_in_asm_listing(code_asm_text, 'MovePlayerWithCPad')
 
-    boostbrake_hook_addr = rom_info.arm9_crackers_boostbrake_hook
-    boostbrake_orig_instr = 0x5c23
-    boostbrake_offset = find_function_offset_in_asm_listing(code_asm_text, 'boostbrake_func')
-
     start_rolling_hook_addr = rom_info.arm9_barrel_roll_hook
     start_rolling_orig_instr = 0x3041
     start_rolling_offset = find_function_offset_in_asm_listing(code_asm_text, 'barrel_roll_func')
-    start_rolling_branch_instr = instr__thumb_bl(start_rolling_hook_addr, arm9_start_address+start_rolling_offset, True)
 
-    touch_sample_hook_addr = rom_info.arm9_touch_sample_hook
-    touch_sample_orig_instr = 0xF000
+    start_rolling_branch_instr = instr__thumb_bl(
+        start_rolling_hook_addr, code_exec_address + start_rolling_offset)
     touch_sample_offset = find_function_offset_in_asm_listing(code_asm_text, 'bomb_touch_sample')
-    touch_sample_branch_instr = instr__thumb_bl(touch_sample_hook_addr, arm9_start_address+touch_sample_offset, True)
+    touch_sample_hook_addr = rom_info.arm9_touch_sample_hook
+    touch_sample_branch_instr = instr__thumb_bl(
+        touch_sample_hook_addr, code_exec_address + touch_sample_offset)
+    shooting_keys = 0x0001 if variant.shoot_on_a else 0x03F0
 
     ar_code += f"""
         # wait for some time, just to be sure (0x27FFC3C is a frame counter)
         427FFC3C 00000100
             52000000 E7FFDEFF
-                {ar_code__bulk_write(code_binary, arm9_start_address)}
+                {code_writes}
         D2000000 00000000
 
         427FFC3C 00000200
-            9{touch_sample_hook_addr:07X} {touch_sample_orig_instr:08X}
-                1{touch_sample_hook_addr+0:07X} {touch_sample_branch_instr[0]:08X}
+            9{touch_sample_hook_addr:07X} 0000F000
+                1{touch_sample_hook_addr:07X} {touch_sample_branch_instr[0]:08X}
                 1{touch_sample_hook_addr+2:07X} {touch_sample_branch_instr[1]:08X}
         D2000000 00000000
 
         427FFC3C 00000200
             9{player_move_hook_addr:07X} {player_move_orig_instr:08X}
-                {instr__thumb_bx__8byte(player_move_hook_addr, arm9_start_address+player_move_offset, 2)}
-        D2000000 00000000
-
-        427FFC3C 00000200
-            9{boostbrake_hook_addr:07X} {boostbrake_orig_instr:08X}
-                {instr__thumb_bx__8byte(boostbrake_hook_addr, arm9_start_address+boostbrake_offset, 3)}
-                2{rom_info.arm9_crackers_key_mask_addr:07X} 0000000C
+                {instr__thumb_bx__8byte(player_move_hook_addr, code_exec_address+player_move_offset, 2)}
         D2000000 00000000
 
         427FFC3C 00000200
@@ -246,11 +221,10 @@ def generate_action_replay_code(rom_signature):
                 1{start_rolling_hook_addr+2:07X} {start_rolling_branch_instr[1]:08X}
         D2000000 00000000
 
-        # X and Y have flight actions, so they must not also fire. A/B are excluded by
-        # arm9_crackers_key_mask_addr while remaining available to menus.
+        # Select the firing buttons separately from the barrel-roll input.
         427FFC3C 00000200
             9{rom_info.arm9_shooting_keys_addr:07X} 00000FF3
-                1{rom_info.arm9_shooting_keys_addr:07X} 000003F3
+                1{rom_info.arm9_shooting_keys_addr:07X} {shooting_keys:08X}
         D2000000 00000000
 
     """
@@ -272,11 +246,16 @@ def generate_action_replay_codes_for_all_rom_versions():
     for rom_id, info in roms_info.items():
         filename = f"{rom_id} ({info.description})"
 
-        code_text = generate_action_replay_code(rom_id)
-        with open(f"{ac_folder_name}/{filename}.txt", "w") as f:
-            f.write(code_text)
-
-        cheat_codes[rom_id].append({'code': code_text, 'name': "Revised CPad Patch"})
+        for variant in VARIANTS:
+            code_text = generate_action_replay_code(rom_id, variant)
+            output_directory = Path(ac_folder_name) / variant.directory
+            output_directory.mkdir(exist_ok=True)
+            (output_directory / f"{filename}.txt").write_text(code_text)
+            cheat_codes[rom_id].append({
+                'code': code_text,
+                'name': variant.name,
+                'enabled': variant == DEFAULT_VARIANT,
+            })
 
     usrcheat_dat_file = generate_usrcheat_dat_file_with_ar_codes(cheat_codes)
     with open(f'{ac_folder_name}/usrcheat.dat', 'wb') as f:
@@ -313,7 +292,7 @@ def generate_usrcheat_dat_file_with_ar_codes(patches: dict):
             ar_code_values.append(int(columns[1], 16))
         return ar_code_values
 
-    def make_ar_code_record(code_name, code_description, ar_code_values):
+    def make_ar_code_record(code_name, code_description, ar_code_values, enabled=False):
         # Code Header
         ar_code_name = code_name.encode()
         ar_code_description = code_description.encode()
@@ -328,7 +307,8 @@ def generate_usrcheat_dat_file_with_ar_codes(patches: dict):
         ar_code_size_with_header = ar_code_size + len(ar_code_header)
 
         header_attributes = ar_code_size_with_header // 4
-        header_attributes |= 0x01000000  # enable the cheatcode by default
+        if enabled:
+            header_attributes |= 0x01000000
         ar_code_header = struct.pack("<I", header_attributes) + ar_code_header
 
         ar_code_record = ar_code_header + ar_code
@@ -346,7 +326,8 @@ def generate_usrcheat_dat_file_with_ar_codes(patches: dict):
 
         for rom_code in roms_info:
             ar_code_record = make_ar_code_record(rom_code['name'], "",
-                                                 get_ar_code_values_from_text(rom_code['code']))
+                                                 get_ar_code_values_from_text(rom_code['code']),
+                                                 rom_code.get('enabled', False))
             game_codes[rom_id].append(ar_code_record)
 
     # Make it Whole
@@ -376,4 +357,5 @@ def main():
         shutil.rmtree(tmp_folder_name)
 
 
-main()
+if __name__ == "__main__":
+    main()

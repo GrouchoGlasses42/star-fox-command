@@ -276,30 +276,13 @@ void Execute_Code_Async_via_RTCom(int param) {
 
 static void Update_CPad_etc() {
     // Read CPadX, CPadY
-    u8 readVal[3] = {0};
-    u8 readCmd = RTC_READ_ALARM_TIME_2;
+    u8 readVal[2] = {0};
+    u8 readCmd = RTC_READ_COUNTER_EXT;
     rtcTransferReversed(&readCmd, 1, readVal, 2, true);
 
     u8 cpad_x = readVal[1];
     u8 cpad_y = readVal[0];
     *(vu16 *)RTCOM_DATA_OUTPUT = cpad_x | (cpad_y << 8);
-
-    // Read and normalize the C-Stick axes.
-    readCmd = RTC_READ_COUNTER_EXT;
-    rtcTransferReversed(&readCmd, 1, readVal, 3, true);
-
-    s32 cstick_x = (s8)readVal[1];
-    s32 cstick_y = (s8)readVal[0];
-    const s32 sin_45 = 0xB50;
-    s32 rotated_x = (sin_45 * (cstick_x - cstick_y) + 0x800) >> 12;
-    s32 rotated_y = (sin_45 * (cstick_x + cstick_y) + 0x800) >> 12;
-
-    // Suppress small values from stick drift.
-    if (-3 <= rotated_x && rotated_x <= 3) rotated_x = 0;
-    if (-3 <= rotated_y && rotated_y <= 3) rotated_y = 0;
-
-    *(vu16 *)(RTCOM_DATA_OUTPUT + 6) = (s16)rotated_x;
-    *(vu16 *)(RTCOM_DATA_OUTPUT + 8) = (s16)rotated_y;
 }
 
 __attribute__((target("arm"))) void RtcChannelHandler(int n_service, int arg, int no_handle) {
@@ -329,7 +312,7 @@ __attribute__((target("arm"))) void Update_RTCom() {
     //        Wait; Tell Arm11 to patch TwlBg and insert a skip branch
     //        Wait; Tell Arm11 to insert a branch into the patched TwlBg area
     //        Wait; Tell Arm11 to remove the skip branch (and allow the patched-in code to run)
-    //        Wait; Read the Circle Pad and C-Stick data from the RTC registers
+    //        Wait; Read the Circle Pad data from the RTC registers
     enum RtcomStateTime {
         Start = 0,
         UploadCode = 10,

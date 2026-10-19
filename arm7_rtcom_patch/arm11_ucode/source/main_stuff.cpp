@@ -6,53 +6,6 @@
 #define RELOC_ADDR ((void *)0x100000)
 #define RELOC_SIZE (0x28000)
 
-typedef int (*I2C_Read_Func)(void *x, u8 *dst, int dev, int src_addr, int count);
-typedef int (*I2C_Write_Func)(void *x, int dev, int dst_addr, const u8 *dst, int count);
-
-static I2C_Read_Func g_i2c_read_func = nullptr;
-static I2C_Write_Func g_i2c_write_func = nullptr;
-
-void i2c_init() {
-    static const uint8_t i2c_read_pattern[] = {0xff, 0xb5, 0x81, 0xb0, 0x14, 0x46, 0x0d, 0x46,
-                                               0x1e, 0x46, 0x0a, 0x9f, 0x01, 0x98, 0x11, 0x46};
-    size_t ptr = (size_t)pat_memesearch(i2c_read_pattern, nullptr, RELOC_ADDR, RELOC_SIZE,
-                                        sizeof(i2c_read_pattern), 2);
-    if (!ptr) {
-        return;
-    }
-    g_i2c_read_func = (I2C_Read_Func)(ptr | 1);
-
-    static const uint8_t i2c_write_pattern[] = {0xff, 0xb5, 0x81, 0xb0, 0x14, 0x46, 0x05,
-                                                0x46, 0x1e, 0x46, 0x0a, 0x9f, 0x02, 0x99};
-    ptr = (size_t)pat_memesearch(i2c_write_pattern, nullptr, RELOC_ADDR, RELOC_SIZE,
-                                 sizeof(i2c_write_pattern), 2);
-    if (!ptr) {
-        return;
-    }
-    g_i2c_write_func = (I2C_Write_Func)(ptr | 1);
-}
-
-void cstick_init() {
-    if (g_i2c_read_func == nullptr || g_i2c_write_func == nullptr) {
-        return;
-    }
-
-    static const uint8_t i2c_senddata_pattern[] = {0x70, 0xb5, 0x06, 0x46, 0x0b, 0x4c, 0x88,
-                                                   0x00, 0x0d, 0x18, 0x30, 0x46, 0x61, 0x5d};
-    size_t ptr = (size_t)pat_memesearch(i2c_senddata_pattern, nullptr, RELOC_ADDR, RELOC_SIZE,
-                                        sizeof(i2c_senddata_pattern), 2);
-    if (!ptr) {
-        return;
-    }
-
-    vu8 *i2c_device_table = *(vu8 **)(ptr + 0x34);
-    i2c_device_table[0x46] = 0x2;
-    i2c_device_table[0x47] = 0x54;
-
-    u8 mode = 0xFC;
-    g_i2c_write_func(0, 0xE, 0, &mode, 1);
-}
-
 u8 *cpad_init() {
     const static uint8_t hid_update_func_pattern[] = {0x01, 0x0e, 0x08, 0x43, 0xb0, 0x43,
                                                       0x34, 0x40, 0x20, 0x43, 0x84, 0xb2};
@@ -163,10 +116,6 @@ bool find_memory_addresses() {
         return false;
     }
 
-    g_i2c_read_func = nullptr;
-    i2c_init();
-    cstick_init();
-
     return true;
 }
 
@@ -192,8 +141,7 @@ void patch_twlbg(vu8 stage) {
         for (u32 i = 0; i < patch_code_size; i++) {
             *(vu8 *)(main_patch_start + i) = twlbg_patch_code[i];
         }
-        *(u32 *)(main_patch_start + patch_code_size - 8) = (u32)g_cpad_addr;
-        *(u32 *)(main_patch_start + patch_code_size - 4) = (u32)g_i2c_read_func | 1;
+        *(u32 *)(main_patch_start + patch_code_size - 4) = (u32)g_cpad_addr;
         flush_cache(main_patch_start - 2, patch_code_size + 4);
 
         // for now, skip the area we're going to insert the branch into

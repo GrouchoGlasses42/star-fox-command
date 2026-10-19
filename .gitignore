@@ -1,10 +1,19 @@
 .DS_Store
 .mypy_cache/
+__pycache__/
 .vscode/
 
 *.bin
 *.elf
 *.nds
+*.srl
+*.3ds
+*.cci
+*.cxi
+*.cia
+*.firm
+*.sav
+*.dsv
 *.o
 *.obj
 *.out
@@ -12,3 +21,6 @@
 
 build/
 tmp_ndstools/
+roms/
+firmware/
+dumps/

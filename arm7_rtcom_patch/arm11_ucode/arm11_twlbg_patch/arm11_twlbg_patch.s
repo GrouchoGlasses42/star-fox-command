@@ -7,32 +7,6 @@ Main:
     ldrsb   r5, [r0, r5]
 
     push {r0-r7, lr}
-    mov r6, sp @ backup SP
-
-
-ReadCStick:
-    @ I2C_Read(_, output, device_id, address, read_length)
-    mov r4, #0x7
-    mov r3, #0x0
-    mov r2, #0xe
-
-    @ Align the stack pointer and save the result there
-    mov r1, sp
-    sub r1, #0xC
-    bic r1, r4
-    mov sp, r1
-
-    push {r4}
-    ldr r0, I2cRead_FuncAddress
-
-    cmp r0, #13
-    bge ReadCStickFromI2C
-    mov r0, #0
-    str r0, [sp, #0x8]
-    b WriteDataIntoRtcRegs
-
-ReadCStickFromI2C:
-    blx r0
 
 
 WriteDataIntoRtcRegs:
@@ -44,24 +18,16 @@ WriteDataIntoRtcRegs:
     lsl r1, #8
     orr r0, r1
     lsl r0, #8
-    str r0, [r4, #0x34] @ RTC ALRMTIM2 (CPadX => Hour, CPadY => DoW)
-
-    @ Save the C-Stick axes. The low byte stays clear.
-    mov r2, sp
-    ldr r0, [r2, #0x8]  @ [?, CStickY, CStickX, ?]
-    lsr r0, #8          @ [_, ?, CStickY, CStickX]
-    lsl r0, #8          @ [?, CStickY, CStickX, _]
-    str r0, [r4, #0x40] @ RTC COUNTER
+    str r0, [r4, #0x40] @ RTC COUNTER (CPadX => LSB, CPadY => MID)
 
     @@ Update Rtc on the NDS side
-    movs r0, #0x33 @ ALRMDAT2, ALRMDAT1, COUNT, ALRMTIM2
+    movs r0, #0x32 @ ALRMDAT2, ALRMDAT1, _COUNT_, ALRMTIM2
     lsl r0, #6
     ldrh r1, [r4]
     orr r1, r0
     strh r1, [r4] @ rtc control reg; 
 
 Finish:
-    mov sp, r6
     pop {r0-r7, pc}
 
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
@@ -70,4 +36,3 @@ Finish:
 LegacyRtcRegs_Address:  .long 0x1EC47100
 
 CPAD_Address:           .long 0x0 @ filled at runtime
-I2cRead_FuncAddress:    .long 0x0 @ filled at runtime
